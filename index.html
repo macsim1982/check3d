@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - glTF loader</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link rel="stylesheet" href="css/main.css">
+	</head>
+
+	<body>
+		<script type="module">
+
+			import * as THREE from './js/build/three.module.js';
+
+			import { OrbitControls } from './js/plugins/jsm/controls/OrbitControls.js';
+			import { GLTFLoader } from './js/plugins/jsm/loaders/GLTFLoader.js';
+			import { RGBELoader } from './js/plugins/jsm/loaders/RGBELoader.js';
+			import { RoughnessMipmapper } from './js/plugins/jsm/utils/RoughnessMipmapper.js';
+			import { EffectComposer } from './js/plugins/jsm/postprocessing/EffectComposer.js';
+			import { RenderPass } from './js/plugins/jsm/postprocessing/RenderPass.js';
+			import { DotScreenPass } from './js/plugins/jsm/postprocessing/DotScreenPass.js';
+
+			var container, controls;
+			var camera, scene, renderer;
+			var gltfScene;
+			let previousAspect = 0;
+
+			const textureLoader = new THREE.TextureLoader();
+			const bgTexture = textureLoader.load('textures/bromo-screen.jpg');
+			const easeInOutQuad = function (x, t, b, c, d) {
+				if ((t/=d/2) < 1) return c/2*t*t + b;
+				return -c/2 * ((--t)*(t-2) - 1) + b;
+			};
+			//Test Changement de textures
+			var textures = {
+				"Shoe_set_02_Inner_0": 'model/textures/Inner_baseColor2.jpg',
+				"Shoe_set_02_Outer_0": 'model/textures/Outer_baseColor2.jpg',
+				"Shoe_set_02_Laces_0": 'model/textures/Laces_baseColor2.jpg'
+			}
+
+			Object.keys(textures).forEach(key => {
+				var texture = textureLoader.load(textures[key]);
+				texture.flipY = false;
+				textures[key] = texture;
+			});
+
+			var $btn = document.querySelector('.button');
+			$btn.addEventListener('click', (e) => {
+				gltfScene.traverse( function ( child ) {
+					if ( child.isMesh ) {
+						if (textures[child.name]) {
+							child.material.map = textures[child.name];
+						}
+					}
+				});
+			});
+
+
+			var light = new THREE.PointLight( 0xFFFFFF, 1, 100 );
+			var light2 = new THREE.PointLight( 0xFFFFFF, 1, 1000 );
+
+			
+
+			init();
+
+			let composer = new EffectComposer(renderer);
+			var dotScreenPass = new DotScreenPass();
+			composer.addPass(new RenderPass(scene, camera));
+
+			// composer.addPass( dotScreenPass );
+			//render(); // remove when using next line for animation loop (requestAnimationFrame)
+			animate();
+
+			
+
+			function init() {
+
+				container = document.createElement( 'div' );
+				container.id = 'overlay';
+				document.body.appendChild( container );
+
+				camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 0.25, 50 );
+				camera.position.set( - 1.8, 0.6, 10.0 );
+
+				scene = new THREE.Scene();
+				scene.background = bgTexture;
+
+				new RGBELoader()
+					.setDataType( THREE.UnsignedByteType )
+					.setPath( 'textures/' )
+					.load( 'royal_esplanade_1k.hdr', function ( texture ) {
+
+						var envMap = pmremGenerator.fromEquirectangular( texture ).texture;
+
+						scene.environment = envMap;
+						// scene.background = envMap;
+						texture.dispose();
+						pmremGenerator.dispose();
+
+						render();
+
+						var loader = new GLTFLoader().setPath( 'model/' );
+						var roughnessMipmapper = new RoughnessMipmapper( renderer );
+
+						loader.load( 'scene.gltf', function ( gltf ) {
+							gltfScene = gltf.scene;
+
+							gltfScene.traverse( function ( child ) {
+
+								if ( child.isMesh ) {
+
+									// TOFIX RoughnessMipmapper seems to be broken with WebGL 2.0
+									// roughnessMipmapper.generateMipmaps( child.material );
+
+								}
+
+							});
+
+							var mroot = gltf.scene;
+							var bbox = new THREE.Box3().setFromObject(mroot);
+							var cent = bbox.getCenter(new THREE.Vector3());
+							var size = bbox.getSize(new THREE.Vector3());
+
+							//Rescale the object to normalized space
+							var maxAxis = Math.max(size.x, size.y, size.z);
+							mroot.scale.multiplyScalar(1.0 / maxAxis);
+							bbox.setFromObject(mroot);
+							bbox.getCenter(cent);
+							bbox.getSize(size);
+							mroot.position.copy(cent).multiplyScalar(-1.0);
+
+							scene.add( mroot );
+
+							roughnessMipmapper.dispose();
+							render();
+
+						});
+
+					});
+
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.toneMapping = THREE.ACESFilmicToneMapping;
+				renderer.toneMappingExposure = 0.8;
+				renderer.outputEncoding = THREE.sRGBEncoding;
+
+				scene.add( light );
+				scene.add( light2 );
+
+				container.appendChild( renderer.domElement );
+
+				var pmremGenerator = new THREE.PMREMGenerator( renderer );
+				pmremGenerator.compileEquirectangularShader();
+
+				controls = new OrbitControls( camera, renderer.domElement );
+				// controls.addEventListener( 'change', render ); // use if there is no animation loop
+				controls.minDistance = 1;
+				controls.maxDistance = 2;
+
+				controls.target.set( 0, 0, 0 );
+
+				controls.enableDamping = true; // an animation loop is required when either damping or auto-rotation are enabled
+				controls.dampingFactor = 0.05;
+
+				controls.screenSpacePanning = false;
+				controls.enablePan = false;
+				controls.autoRotate = true;
+				controls.autoRotateSpeed = 4.0;
+
+				// controls.maxPolarAngle = Math.PI / 2;
+				controls.update();
+
+				window.addEventListener( 'resize', onWindowResize, false );
+
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+				animate();
+
+			}
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+
+				controls.update(); // only required if controls.enableDamping = true, or if controls.autoRotate = true
+
+				render();
+
+			}
+
+			//
+			
+			function render() {
+				let pixelRatio = window.innerHeight * window.innerWidth > 1024 * 1024 ? 1 : window.devicePixelRatio;
+
+				console.log(pixelRatio);
+				renderer.setPixelRatio( pixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+				const canvasAspect = container.clientWidth / container.clientHeight;
+				const imageAspect = bgTexture.image ? bgTexture.image.width / bgTexture.image.height : 1;
+				const aspect = imageAspect / canvasAspect;
+
+				if (aspect !== previousAspect) {
+					bgTexture.offset.x = aspect > 1 ? (1 - 1 / aspect) / 2 : 0;
+					bgTexture.repeat.x = aspect > 1 ? 1 / aspect : 1;
+
+					bgTexture.offset.y = aspect > 1 ? 0 : (1 - aspect) / 2;
+					bgTexture.repeat.y = aspect > 1 ? 1 : aspect;
+				}
+
+				light.position.set( camera.position.x * 1, camera.position.y * 1, camera.position.z * 1 );
+				light2.position.set( camera.position.x * -1.4, camera.position.y * -1.0, camera.position.z * -2.0 );
+				// light.translateX(10);
+				// light.translateY(10);
+				light2.translateX(-30);
+				light2.translateY(-30);
+				// light2.translateZ(-130);
+
+				composer.render();
+
+				previousAspect = aspect;
+			}
+
+		</script>
+		<button class="button" style="position: absolute; top: 10px; left: 10px; z-index: 10">Click</button>
+	</body>
+</html>
